@@ -227,6 +227,7 @@ class PlotWidget(QWidget):
         self.lines = []  # 所有连接线
         self.point_labels = []  # 点标签
         self.operations = []  # 操作历史记录
+        self.all_annotation_texts = []  # 存储所有需要判断范围的文本内容
 
         # 绑定事件
         self.cid_pick = self.canvas.mpl_connect('pick_event', self.on_pick)
@@ -326,6 +327,8 @@ class PlotWidget(QWidget):
         self.lines = []
         self.point_labels = []
         self.operations = []
+        self.all_annotation_texts = []
+
         # 重置标签
         self.axes.set_xlabel(self.x_col if self.x_col else 'X坐标')
         self.axes.set_ylabel(self.y_col if self.y_col else 'Y坐标')
@@ -388,6 +391,9 @@ class PlotWidget(QWidget):
             fontsize=9, color='black', fontweight='bold'
         )
         self.point_labels.append(label)
+        label.text_x = x_data[ind]
+        label.text_y = y_data[ind]
+        self.all_annotation_texts.append(label)  # 加入统一管理
 
         # 当选中2个点时，绘制连接线和距离
         if len(self.selected_indices) == 2:
@@ -411,6 +417,9 @@ class PlotWidget(QWidget):
                 color='black', fontsize=10, fontweight='bold'
             )
             self.annotations.append(annot)
+            annot.text_x = mid_x
+            annot.text_y = mid_y
+            self.all_annotation_texts.append(annot) # 统一管理
 
             # 记录操作历史
             self.operations.append({
@@ -440,6 +449,8 @@ class PlotWidget(QWidget):
                 if self.point_labels:
                     for label in self.point_labels[-len(self.selected_indices):]:
                         label.remove()
+                        if label in self.all_annotation_texts:
+                            self.all_annotation_texts.remove(label)     # 同步删除
                     del self.point_labels[-len(self.selected_indices):]
 
                 # 恢复点颜色
@@ -466,12 +477,16 @@ class PlotWidget(QWidget):
                 if last_op['annotation'] in self.annotations:
                     last_op['annotation'].remove()
                     self.annotations.remove(last_op['annotation'])
+                    if last_op['annotation'] in self.all_annotation_texts:
+                        self.all_annotation_texts.remove(last_op['annotation']) # 同步删除
 
                 # 移除点标签
                 for label in last_op['labels']:
                     if label in self.point_labels:
                         label.remove()
                         self.point_labels.remove(label)
+                        if label in self.all_annotation_texts:
+                            self.all_annotation_texts.remove(label)
 
                 # 恢复点颜色
                 x_data = self.coordinates[self.x_col].to_numpy()
@@ -510,6 +525,8 @@ class PlotWidget(QWidget):
         self.axes.set_xlim(new_x_start, new_x_start + new_width)
         self.axes.set_ylim(new_y_start, new_y_start + new_height)
 
+        self.set_text_visibility()  # 设置文字的可见性
+
         self.canvas.draw()
 
    # 鼠标按下事件（用于拖拽开始）
@@ -521,7 +538,7 @@ class PlotWidget(QWidget):
         # 严格判断：1. 左键（button=1）；2. 在绘图区域内（event.inaxes == self.axes）；3. 坐标有效（非None）
         if (event.button == 1  # 1代表鼠标左键
                 and event.inaxes == self.axes  # 确保鼠标在散点图的坐标轴区域内
-                and event.xdata is not None  # 排除鼠标在区域边缘导致的x坐标无效
+                and event.xdata is not None    # 排除鼠标在区域边缘导致的x坐标无效
                 and event.ydata is not None):  # 排除鼠标在区域边缘导致的y坐标无效
 
             # 开启拖拽状态
@@ -552,22 +569,26 @@ class PlotWidget(QWidget):
         # 流畅拖拽逻辑
         if self.is_dragging:  # 只在拖拽状态开启时执行
             # 过滤无效情况：鼠标移出绘图区域 / 坐标无效
-            axtemp = event.inaxes
-            if axtemp and event.button == 1:
-                x_min, x_max = axtemp.get_xlim()
-                y_min, y_max = axtemp.get_ylim()
+            # axtemp = event.inaxes
+            if self.axes and event.button == 1:
+                x_min, x_max = self.axes.get_xlim()
+                y_min, y_max = self.axes.get_ylim()
                 w = x_max - x_min
                 h = y_max - y_min
-                # print(event)
-                # 移动
+
+                # 如果不在坐标轴范围内 则返回
+                if(event.xdata is None) or (event.ydata is None):
+                    return
+
+                # 计算距离
                 mx = event.xdata - self.startx
                 my = event.ydata - self.starty
-                # 注意这里， -mx,  因为下一次 motion事件的坐标，已经是在本次做了移动之后的坐标系了，所以要体现出来
-                # startx=event.xdata-mx  startx=event.xdata-(event.xdata-startx)=startx, 没必要再赋值了
-                # starty=event.ydata-my
-                # print(mx,my,x_min,y_min,w,h)
-                axtemp.set(xlim=(x_min - mx, x_min - mx + w))
-                axtemp.set(ylim=(y_min - my, y_min - my + h))
+                # 应用移动
+                self.axes.set(xlim=(x_min - mx, x_min - mx + w))
+                self.axes.set(ylim=(y_min - my, y_min - my + h))
+
+                self.set_text_visibility()      # 设置文字的可见性
+
                 self.canvas.draw_idle()  # 绘图动作实时反映在图像上
 
         # 原有悬停提示逻辑（保留，不影响拖拽）
@@ -620,6 +641,30 @@ class PlotWidget(QWidget):
                 self.hover_text.remove()
                 self.hover_text = None
                 self.canvas.draw()
+
+    # 设置文字的可见性
+    def set_text_visibility(self):
+        # 获得新坐标轴范围
+        current_xmin, current_xmax = self.axes.get_xlim()
+        current_ymin, current_ymax = self.axes.get_ylim()
+
+        # 计算偏移量
+        x_offset = (current_xmax - current_xmin) * 0.01
+        y_offset = (current_ymax - current_ymin) * 0.01
+
+        # 遍历所有文本，控制隐藏显示
+        for text in self.all_annotation_texts:
+            # 检查文本是否有记录的位置属性
+            if hasattr(text, 'text_x') and hasattr(text, 'text_y'):
+                text_x = text.text_x
+                text_y = text.text_y
+
+                # 判断文本是否完全在当前范围内
+                if (current_xmin + x_offset <= text_x <= current_xmax - x_offset and
+                        current_ymin + y_offset <= text_y <= current_ymax - y_offset):
+                    text.set_visible(True)
+                else:
+                    text.set_visible(False)
 
 
 # 为了确保PyQt的焦点设置生效，需要导入Qt
