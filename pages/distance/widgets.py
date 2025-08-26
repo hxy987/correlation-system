@@ -240,7 +240,7 @@ class PlotWidget(QWidget):
         self.canvas.setFocusPolicy(Qt.StrongFocus)
         self.canvas.setFocus()
 
-    def plotPoints(self, coordinates: pd.DataFrame, x_col=None, y_col=None,
+    def plotPoints(self, coordinates: pd.DataFrame, distance : pd.DataFrame ,x_col=None, y_col=None,
                    color='skyblue', marker='o', size=50, alpha=0.7, label=None,
                    names=None):
         """绘制点坐标散点图，支持交互选择和距离计算"""
@@ -255,6 +255,7 @@ class PlotWidget(QWidget):
         # 保存数据供交互使用
         self.coordinates = coordinates.copy()
         self.names = coordinates.index.tolist()
+        self.distance = distance.copy()
 
         # 确定 x和 y列
         columns = coordinates.columns.tolist()
@@ -384,7 +385,7 @@ class PlotWidget(QWidget):
         label = self.axes.text(
             x_data[ind], y_data[ind],
             f"{self.names[ind]}\n({x_data[ind]:.3f},{y_data[ind]:.3f})",
-            fontsize=9, color='blue', fontweight='bold'
+            fontsize=9, color='black', fontweight='bold'
         )
         self.point_labels.append(label)
 
@@ -393,12 +394,12 @@ class PlotWidget(QWidget):
             i, j = self.selected_indices
 
             # 计算距离
-            dist = np.sqrt((x_data[i] - x_data[j]) ** 2 + (y_data[i] - y_data[j]) ** 2)
+            dist = self.distance.iloc[i, j]
 
             # 绘制连接线
             line, = self.axes.plot(
                 [x_data[i], x_data[j]], [y_data[i], y_data[j]],
-                color='blue', linewidth=1.5
+                color='red', linewidth=1.5
             )
             self.lines.append(line)
 
@@ -407,7 +408,7 @@ class PlotWidget(QWidget):
             mid_y = (y_data[i] + y_data[j]) / 2
             annot = self.axes.text(
                 mid_x, mid_y, f"距离: {dist:.3f}",
-                color='blue', fontsize=10, fontweight='bold'
+                color='black', fontsize=10, fontweight='bold'
             )
             self.annotations.append(annot)
 

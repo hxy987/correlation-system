@@ -86,7 +86,7 @@ class DistanceInterface(QWidget, Ui_distance_page):
         self.reduceDimButton.clicked.connect(lambda: self.controllers.reduce(self.eudistance))
         self.reduceDimButton.clicked.connect(lambda: self.controllers.reduce(self.infodistance))
         # 绘图按钮
-        self.drawButton.clicked.connect(lambda: self.controllers.plot_coordinates(self.coordinates))
+        self.drawButton.clicked.connect(lambda: self.controllers.plot_coordinates(self.coordinates , self.eudistance))
         # 导出按钮
         self.downloadEuDistButton.clicked.connect(lambda: self.controllers.download_data("eudistance"))
         self.downloadInfoDistButton.clicked.connect(lambda: self.controllers.download_data("infodistance"))

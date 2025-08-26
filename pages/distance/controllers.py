@@ -266,7 +266,7 @@ class Controllers:
         return True
 
     # 绘图
-    def plot_coordinates(self, coordinates: pd.DataFrame):
+    def plot_coordinates(self, coordinates: pd.DataFrame , distance: pd.DataFrame):
         """绘制坐标点到新标签页。
 
         Args:
@@ -281,7 +281,7 @@ class Controllers:
 
         try:
             plot_widget = PlotWidget()
-            plot_widget.plotPoints(coordinates)
+            plot_widget.plotPoints(coordinates , distance)
             self.add_tab(plot_widget, "plot", "坐标图", icon="assets/icon/book.png")
             self._notify("success", "绘图完成", "坐标图已生成。")
         except Exception as e:
