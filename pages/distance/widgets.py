@@ -1,6 +1,6 @@
 from PyQt5.QtGui import QShowEvent
 from PyQt5.QtWidgets import QWidget, QApplication, QVBoxLayout, QFileDialog
-from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex
+from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, QTimer
 
 from qfluentwidgets import TableView
 
@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib import rcParams
-
+import time
 
 class FileDialog(QFileDialog):
     def __init___(self, parent):
@@ -199,21 +199,27 @@ class PlotWidget(QWidget):
         self.axes.set_ylabel('Y坐标')
         self.axes.set_title('散点图')
         self.hint_text = self.axes.text(
-            0.01, 0.01,  # 位置（左下角，相对坐标）
-            "按 Z 键撤销标注",
-            fontsize=14,
-            color='green',
-            transform=self.axes.transAxes,  # 使用相对坐标（0-1 范围）
-            verticalalignment='bottom',  # 垂直对齐方式
-            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7)  # 白色背景框，增加可读性
+            0.01, 0.01, "按Z键撤销标注 | 鼠标拖拽平移 | 悬停查看点信息",
+            fontsize=10, color='green', transform=self.axes.transAxes,
+            verticalalignment='bottom',
+            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7)
         )
-
         # 交互功能变量初始化
         self.scatter = None  # 散点图对象
         self.coordinates = None  # 存储坐标数据
         self.names = None  # 点名称
         self.x_col = None  # x列名
         self.y_col = None  # y列名
+
+        # 拖拽功能变量
+        self.is_dragging = False
+        self.startx = 0
+        self.starty = 0
+
+        # 悬停提示变量
+        self.hover_text = None      # 存储悬停提示文本对象
+        self.last_hover_time = 0    # 悬停防抖
+        self.hover_threshold = 0.05  # 悬停检测阈值（根据数据范围调整）
 
         # 交互状态变量
         self.selected_indices = []  # 当前选中的点索引
@@ -226,6 +232,9 @@ class PlotWidget(QWidget):
         self.cid_pick = self.canvas.mpl_connect('pick_event', self.on_pick)
         self.cid_key = self.canvas.mpl_connect('key_press_event', self.on_key)
         self.cid_scroll = self.canvas.mpl_connect('scroll_event', self.on_scroll)
+        self.cid_press = self.canvas.mpl_connect('button_press_event', self.on_mouse_press)
+        self.cid_release = self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
+        self.cid_motion = self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
         # 确保画布获得焦点以接收键盘事件
         self.canvas.setFocusPolicy(Qt.StrongFocus)
@@ -274,6 +283,13 @@ class PlotWidget(QWidget):
             # 清空之前的绘图和状态
             self.clearPlot()
 
+            # 动态计算悬停阈值（数据标准差的 1/10，平衡灵敏和准确）
+            x_std = np.std(x_data)
+            y_std = np.std(y_data)
+            self.hover_threshold = max(x_std, y_std) * 0.1  # 取 x/y 标准差的较大值的 1/10
+            if self.hover_threshold < 0.01:  # 避免阈值过小（最小设为 0.01）
+                self.hover_threshold = 0.01
+
             # 绘制散点图，开启拾取功能
             self.scatter = self.axes.scatter(
                 x_data, y_data,
@@ -315,11 +331,8 @@ class PlotWidget(QWidget):
         self.axes.grid(True, alpha=0.3)
         # 保留提示
         self.hint_text = self.axes.text(
-            0.01, 0.01,
-            "按Z键撤销标注",
-            fontsize=14,
-            color='green',
-            transform=self.axes.transAxes,
+            0.01, 0.01, "按Z键撤销标注 | 鼠标拖拽平移 | 悬停查看点信息",
+            fontsize=10, color='green', transform=self.axes.transAxes,
             verticalalignment='bottom',
             bbox=dict(facecolor='white', edgecolor='none', alpha=0.7)
         )
@@ -497,6 +510,115 @@ class PlotWidget(QWidget):
         self.axes.set_ylim(new_y_start, new_y_start + new_height)
 
         self.canvas.draw()
+
+   # 鼠标按下事件（用于拖拽开始）
+    def on_mouse_press(self, event):
+        """
+        鼠标按下事件：初始化拖拽状态，记录初始鼠标位置
+        只响应左键在绘图区域内的有效点击，避免无效拖拽触发
+        """
+        # 严格判断：1. 左键（button=1）；2. 在绘图区域内（event.inaxes == self.axes）；3. 坐标有效（非None）
+        if (event.button == 1  # 1代表鼠标左键
+                and event.inaxes == self.axes  # 确保鼠标在散点图的坐标轴区域内
+                and event.xdata is not None  # 排除鼠标在区域边缘导致的x坐标无效
+                and event.ydata is not None):  # 排除鼠标在区域边缘导致的y坐标无效
+
+            # 开启拖拽状态
+            self.is_dragging = True
+
+            # 记录拖拽起始点的坐标（后续计算位移用）
+            self.startx = event.xdata
+            self.starty = event.ydata
+
+    # 鼠标释放事件（用于拖拽结束）
+    def on_mouse_release(self, event):
+        """
+        鼠标释放事件：结束拖拽状态，避免鼠标松开后仍继续拖拽
+        """
+        # 只有左键释放时，才关闭拖拽状态（与按下事件的左键逻辑对应）
+        if event.button == 1:
+            # 关闭拖拽状态
+            self.is_dragging = False
+
+
+    # 鼠标移动事件（同时处理拖拽和悬停）
+    def on_mouse_move(self, event):
+        """
+        鼠标移动事件：
+        处理拖拽（带防抖，确保流畅）；
+        处理悬停提示（保留原有功能，不冲突）
+        """
+        # 流畅拖拽逻辑
+        if self.is_dragging:  # 只在拖拽状态开启时执行
+            # 过滤无效情况：鼠标移出绘图区域 / 坐标无效
+            axtemp = event.inaxes
+            if axtemp and event.button == 1:
+                x_min, x_max = axtemp.get_xlim()
+                y_min, y_max = axtemp.get_ylim()
+                w = x_max - x_min
+                h = y_max - y_min
+                # print(event)
+                # 移动
+                mx = event.xdata - self.startx
+                my = event.ydata - self.starty
+                # 注意这里， -mx,  因为下一次 motion事件的坐标，已经是在本次做了移动之后的坐标系了，所以要体现出来
+                # startx=event.xdata-mx  startx=event.xdata-(event.xdata-startx)=startx, 没必要再赋值了
+                # starty=event.ydata-my
+                # print(mx,my,x_min,y_min,w,h)
+                axtemp.set(xlim=(x_min - mx, x_min - mx + w))
+                axtemp.set(ylim=(y_min - my, y_min - my + h))
+                self.canvas.draw_idle()  # 绘图动作实时反映在图像上
+
+        # 原有悬停提示逻辑（保留，不影响拖拽）
+        if (self.scatter is not None
+                and event.inaxes == self.axes
+                and event.xdata is not None
+                and event.ydata is not None):
+
+            # 悬停防抖（与拖拽防抖逻辑类似，避免频繁计算）
+            current_time = time.time() * 1000
+            hover_interval = 50  # 悬停检测间隔（50ms，避免闪烁）
+
+            if (current_time - self.last_hover_time) > hover_interval:
+                self.last_hover_time = current_time
+
+                # 获取点坐标数据
+                x_data = self.coordinates[self.x_col].to_numpy()
+                y_data = self.coordinates[self.y_col].to_numpy()
+
+                # 计算鼠标与所有点的距离
+                distances = np.sqrt((x_data - event.xdata) ** 2 + (y_data - event.ydata) ** 2)
+                min_dist = np.min(distances)
+                min_dist_idx = np.argmin(distances)
+
+                # 若距离小于阈值，显示悬停提示
+                if min_dist < self.hover_threshold:
+                    # 移除旧提示（避免重复叠加）
+                    if self.hover_text:
+                        self.hover_text.remove()
+
+                    # 显示新提示（位置微调，避免遮挡点）
+                    offset = self.hover_threshold * 0.5  # 偏移量（与点保持适当距离）
+                    self.hover_text = self.axes.text(
+                        x_data[min_dist_idx] + offset,
+                        y_data[min_dist_idx] + offset,
+                        f"{self.names[min_dist_idx]}\n({x_data[min_dist_idx]:.3f},{y_data[min_dist_idx]:.3f})",
+                        fontsize=9, color='green', fontweight='bold',
+                        bbox=dict(facecolor='white', edgecolor='gray', alpha=0.8, pad=2)
+                    )
+                    self.canvas.draw()
+                else:
+                    # 距离过远，移除悬停提示
+                    if self.hover_text:
+                        self.hover_text.remove()
+                        self.hover_text = None
+                        self.canvas.draw()
+        else:
+            # 鼠标在绘图区域外，移除悬停提示
+            if self.hover_text:
+                self.hover_text.remove()
+                self.hover_text = None
+                self.canvas.draw()
 
 
 # 为了确保PyQt的焦点设置生效，需要导入Qt
