@@ -199,7 +199,7 @@ class PlotWidget(QWidget):
         self.axes.set_ylabel('Y坐标')
         self.axes.set_title('散点图')
         self.hint_text = self.axes.text(
-            0.01, 0.01, "按Z键撤销标注 | 鼠标拖拽平移 | 悬停查看点信息",
+            0.01, 0.01, "按Z键撤销标注 | 按A键显示所有点名称 | 鼠标拖拽平移 | 悬停查看点信息",
             fontsize=10, color='green', transform=self.axes.transAxes,
             verticalalignment='bottom',
             bbox=dict(facecolor='white', edgecolor='none', alpha=0.7)
@@ -215,6 +215,10 @@ class PlotWidget(QWidget):
         self.is_dragging = False
         self.startx = 0
         self.starty = 0
+
+        # 用于管理所有点名称的显示状态
+        self.all_point_names = []  # 存储所有点的名称文本对象
+        self.show_all_names = False  # 控制是否显示所有点名称的开关
 
         # 悬停提示变量
         self.hover_text = None      # 存储悬停提示文本对象
@@ -328,6 +332,7 @@ class PlotWidget(QWidget):
         self.point_labels = []
         self.operations = []
         self.all_annotation_texts = []
+        self.clear_all_point_names()
 
         # 重置标签
         self.axes.set_xlabel(self.x_col if self.x_col else 'X坐标')
@@ -335,7 +340,7 @@ class PlotWidget(QWidget):
         self.axes.grid(True, alpha=0.3)
         # 保留提示
         self.hint_text = self.axes.text(
-            0.01, 0.01, "按Z键撤销标注 | 鼠标拖拽平移 | 悬停查看点信息",
+            0.01, 0.01, "按Z键撤销标注 | 按A键显示所有点名称 | 鼠标拖拽平移 | 悬停查看点信息",
             fontsize=10, color='green', transform=self.axes.transAxes,
             verticalalignment='bottom',
             bbox=dict(facecolor='white', edgecolor='none', alpha=0.7)
@@ -435,65 +440,122 @@ class PlotWidget(QWidget):
         # 更新显示
         self.canvas.draw()
 
-    # 键盘事件：撤销上一次操作
+    # 键盘事件：撤销上一次操作 / 显示所有点名称
     def on_key(self, event):
         if event.key == 'z':  # 撤销
-            if not self.operations and not self.selected_indices:
-                print("没有可撤销的操作")
-                return
+            self.withdraw()
+        elif event.key == 'a':  # 显示所有点名称
+            self.toggle_all_point_names()
 
-            # 处理未完成的选择（只选了一个点）
-            if self.selected_indices:
-                print(f"撤销未完成的选择，清除 {len(self.selected_indices)} 个点")
-                # 清除选中状态
-                if self.point_labels:
-                    for label in self.point_labels[-len(self.selected_indices):]:
-                        label.remove()
-                        if label in self.all_annotation_texts:
-                            self.all_annotation_texts.remove(label)     # 同步删除
-                    del self.point_labels[-len(self.selected_indices):]
 
-                # 恢复点颜色
-                x_data = self.coordinates[self.x_col].to_numpy()
-                colors = ['skyblue'] * len(x_data)
-                self.scatter.set_color(colors)
+    # 撤销
+    def withdraw(self):
+        if not self.operations and not self.selected_indices:
+            print("没有可撤销的操作")
+            return
 
-                # 重置选中列表
-                self.selected_indices = []
-                self.canvas.draw()
-                return
+        # 处理未完成的选择（只选了一个点）
+        if self.selected_indices:
+            print(f"撤销未完成的选择，清除 {len(self.selected_indices)} 个点")
+            # 清除选中状态
+            if self.point_labels:
+                for label in self.point_labels[-len(self.selected_indices):]:
+                    label.remove()
+                    if label in self.all_annotation_texts:
+                        self.all_annotation_texts.remove(label)  # 同步删除
+                del self.point_labels[-len(self.selected_indices):]
 
-            # 处理已完成的操作
-            if self.operations:
-                last_op = self.operations.pop()
-                print(f"撤销上一次操作，清除 {len(last_op['points'])} 个点的标记")
+            # 恢复点颜色
+            x_data = self.coordinates[self.x_col].to_numpy()
+            colors = ['skyblue'] * len(x_data)
+            self.scatter.set_color(colors)
 
-                # 移除连接线
-                if last_op['line'] in self.lines:
-                    last_op['line'].remove()            # 删除图像
-                    self.lines.remove(last_op['line'])  # 删除内存中的线
+            # 重置选中列表
+            self.selected_indices = []
+            self.canvas.draw()
+            return
 
-                # 移除距离标注
-                if last_op['annotation'] in self.annotations:
-                    last_op['annotation'].remove()
-                    self.annotations.remove(last_op['annotation'])
-                    if last_op['annotation'] in self.all_annotation_texts:
-                        self.all_annotation_texts.remove(last_op['annotation']) # 同步删除
+        # 处理已完成的操作
+        if self.operations:
+            last_op = self.operations.pop()
+            print(f"撤销上一次操作，清除 {len(last_op['points'])} 个点的标记")
 
-                # 移除点标签
-                for label in last_op['labels']:
-                    if label in self.point_labels:
-                        label.remove()
-                        self.point_labels.remove(label)
-                        if label in self.all_annotation_texts:
-                            self.all_annotation_texts.remove(label)
+            # 移除连接线
+            if last_op['line'] in self.lines:
+                last_op['line'].remove()  # 删除图像
+                self.lines.remove(last_op['line'])  # 删除内存中的线
 
-                # 恢复点颜色
-                x_data = self.coordinates[self.x_col].to_numpy()
-                colors = ['skyblue'] * len(x_data)
-                self.scatter.set_color(colors)
+            # 移除距离标注
+            if last_op['annotation'] in self.annotations:
+                last_op['annotation'].remove()
+                self.annotations.remove(last_op['annotation'])
+                if last_op['annotation'] in self.all_annotation_texts:
+                    self.all_annotation_texts.remove(last_op['annotation'])  # 同步删除
 
-                self.canvas.draw()
+            # 移除点标签
+            for label in last_op['labels']:
+                if label in self.point_labels:
+                    label.remove()
+                    self.point_labels.remove(label)
+                    if label in self.all_annotation_texts:
+                        self.all_annotation_texts.remove(label)
+
+            # 恢复点颜色
+            x_data = self.coordinates[self.x_col].to_numpy()
+            colors = ['skyblue'] * len(x_data)
+            self.scatter.set_color(colors)
+
+            self.canvas.draw()
+
+    # 切换所有点名称的显示/隐藏状态
+    def toggle_all_point_names(self):
+        # 如果当前没有显示所有名称，则创建并显示
+        if not self.show_all_names:
+            # 清除之前可能残留的名称文本（避免重复创建）
+            self.clear_all_point_names()
+
+            # 获取所有点的坐标和名称
+            x_data = self.coordinates[self.x_col].to_numpy()
+            y_data = self.coordinates[self.y_col].to_numpy()
+
+            # 为每个点创建名称文本（仅显示名称，不包含坐标）
+            for i in range(len(x_data)):
+                # 文本位置：点的右下方（避免遮挡点本身）
+                text = self.axes.text(
+                    x_data[i] + 0.01,  # 微小偏移，避免重叠
+                    y_data[i] + 0.01,
+                    self.names[i],  # 只显示样本点名称
+                    fontsize=8,  # 较小字号，避免拥挤
+                    color='darkred',  # 与其他文本区分开
+                    alpha=0.6  # 轻微透明
+                )
+                text.text_x = x_data[i]
+                text.text_y = y_data[i]
+                self.all_point_names.append(text)
+
+            # 更新状态为"已显示"
+            self.show_all_names = True
+
+            # 仅显示范围内的文字
+            self.set_text_visibility()
+
+            print(f"显示所有 {len(self.all_point_names)} 个样本点名称")
+
+        # 如果当前已显示所有名称，则隐藏并清除
+        else:
+            self.clear_all_point_names()
+            self.show_all_names = False
+            print("隐藏所有样本点名称")
+
+        # 刷新画布
+        self.canvas.draw_idle()
+
+    # 清除所有点的名称显示
+    def clear_all_point_names(self):
+        for text in self.all_point_names:
+            text.remove()
+        self.all_point_names = []
+        self.show_all_names = False
 
     # 鼠标滚轮事件：实现缩放功能
     def on_scroll(self, event):
@@ -656,16 +718,26 @@ class PlotWidget(QWidget):
         for text in self.all_annotation_texts:
             # 检查文本是否有记录的位置属性
             if hasattr(text, 'text_x') and hasattr(text, 'text_y'):
-                text_x = text.text_x
-                text_y = text.text_y
+                self.set_visibility(text,current_xmin, current_xmax, current_ymin, current_ymax,x_offset, y_offset)
 
-                # 判断文本是否完全在当前范围内
-                if (current_xmin + x_offset <= text_x <= current_xmax - x_offset and
-                        current_ymin + y_offset <= text_y <= current_ymax - y_offset):
-                    text.set_visible(True)
-                else:
-                    text.set_visible(False)
+        # 如果当前是显示所有点的名称时
+        if self.show_all_names:
+            for text in self.all_point_names:
+                # 检查文本是否有记录的位置属性
+                if hasattr(text, 'text_x') and hasattr(text, 'text_y'):
+                    self.set_visibility(text, current_xmin, current_xmax, current_ymin, current_ymax, x_offset,y_offset)
 
+    # 设置文字可见性的辅助函数
+    def set_visibility(self,text,current_xmin,current_xmax,current_ymin,current_ymax,x_offset,y_offset):
+        text_x = text.text_x
+        text_y = text.text_y
+
+        # 判断文本是否完全在当前范围内
+        if (current_xmin + x_offset <= text_x <= current_xmax - x_offset and
+                current_ymin + y_offset <= text_y <= current_ymax - y_offset):
+            text.set_visible(True)
+        else:
+            text.set_visible(False)
 
 # 为了确保PyQt的焦点设置生效，需要导入Qt
 from PyQt5.QtCore import Qt
